@@ -50,6 +50,7 @@ DEFAULTS: dict[str, Any] = {
     "anlas_remind_percent": 1,
     "skip_nai5_no_usage": False,
     "format_input": True,
+    "suggest_format": True,
     "remove_nsfw": True,
     "smtp_num": 0,
     "smtp_mail": None,
@@ -69,6 +70,7 @@ _BOOL_KEYS = {
     "skip_inquire_anlas",
     "skip_nai5_no_usage",
     "format_input",
+    "suggest_format",
     "remove_nsfw",
 }
 _INT_KEYS = {"cool_time", "port", "smtp_num", "anlas_remind_percent"}

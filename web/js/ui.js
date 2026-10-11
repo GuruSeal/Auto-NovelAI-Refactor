@@ -636,18 +636,68 @@ export function fileDropZone({ label = null, placeholder = "点击选择或拖�
 
 // ---------------- 提示词自动补全 (插入时补逗号) ----------------
 
-function insertSuggestion(textarea, suggestion) {
+let _suggestFmtPref = null; // null=未读取, undefined=读取中, true/false=已确定的开关值
+
+/** 预取「补全时是否格式化」开关 (设置页保存后调用本函数刷新缓存)。
+ *  未取到设置时按 true 处理, 保持旧行为。 */
+export function refreshSuggestFormatPref() {
+  _suggestFmtPref = undefined;
+  import("./api.js")
+    .then(({ get }) => get("/api/settings"))
+    .then((s) => { _suggestFmtPref = s?.suggest_format !== false; })
+    .catch(() => { _suggestFmtPref = true; });
+}
+
+/** 当前「补全时格式化」开关值; 缓存未就绪时同步返回 true (默认格式化) */
+export function suggestFormatEnabled() {
+  if (_suggestFmtPref === null) refreshSuggestFormatPref();
+  return _suggestFmtPref === undefined || _suggestFmtPref === null ? true : _suggestFmtPref;
+}
+
+/** 计算「光标所在的当前词」区间 [start, end)。以逗号/换行为分隔:
+ *  从光标向左找最近分隔符, 再跳过前导空格得 start; 向右找最近分隔符得 end。
+ *  光标停在标签中间也能识别出完整当前词 —— 旧实现取「全文最后一段」, 光标不在
+ *  末尾时关键词会带上后半截文本, 后端匹配不到, 列表就此不弹。
+ *  注意 start 必须落在词的首字符上 (不含前导空格), 否则拼给后端的 keyword
+ *  会带空格, " blue" 经 replace(" ","_") 变成 "_blue", 匹配必然失败。 */
+function wordRangeAt(textarea) {
   const value = textarea.value;
-  // 各段先去首尾空格, 避免中间段残留前导空格被 join(", ") 反复累积 (越补空格越多)
-  const parts = value.split(",").map((p) => p.trim());
-  if (value.endsWith(",")) {
-    parts.push(suggestion.split(",")[0]);
-  } else {
-    parts[parts.length - 1] = suggestion.split(",")[0];
-  }
-  // 末尾补逗号, 方便继续输入下一个标签; 顺带清掉空的段
-  textarea.value = parts.filter((p) => p !== "").join(", ") + ", ";
+  let pos = textarea.selectionStart ?? value.length;
+  if (textarea.selectionEnd != null && textarea.selectionEnd > pos) pos = textarea.selectionEnd; // 有选区时以右边界为准
+  const isSep = (ch) => ch === "," || ch === "\n" || ch === "\r" || ch === "，";
+  const isBlank = (ch) => ch === " " || ch === "\t";
+  let start = pos;
+  while (start > 0 && !isSep(value[start - 1])) start--;
+  while (start < pos && isBlank(value[start])) start++; // 跳过前导空格/制表符
+  let end = pos;
+  while (end < value.length && !isSep(value[end])) end++;
+  while (end > start && isBlank(value[end - 1])) end--; // 尾部空白不算词的一部分
+  return { start, end, kw: value.slice(start, pos) };
+}
+
+/** 把当前词区间 [start, end) 换成 suggestion, 其余原文逐字保留 —— 这是关键:
+ *  旧实现用 join(", ") 重写整行, 会把换行、多余空格、权重块写法全部压平。
+ *  这里只动一段, 所以「补全时格式化」开关的可观测差异只剩收尾逗号的补法。
+ *  词尾还跟着东西 → 精确替换; 词尾已在行末 → 补 ", " 方便接着输入下一个标签。 */
+function replaceWord(textarea, start, end, suggestion, { pad = true } = {}) {
+  const value = textarea.value;
+  const before = value.slice(0, start);
+  const after = value.slice(end);
+  const addSep = pad && after === "";
+  textarea.value = before + suggestion + (addSep ? ", " : "") + after;
+  const caret = before.length + suggestion.length + (addSep ? 2 : 0);
+  try { textarea.setSelectionRange(caret, caret); } catch { /* 只读/隐藏时忽略 */ }
   textarea.dispatchEvent(new Event("input"));
+}
+
+function insertSuggestion(textarea, suggestion) {
+  const tag = String(suggestion).split(",")[0];
+  const range = wordRangeAt(textarea);
+  // 光标停在分隔符上时当前词为空: 此时绝不能替换 —— range.end 会指向下一个词,
+  // 盲目替换等于把用户后面那个标签整个吞掉。直接不动作, 交给调用方收尾。
+  if (!range.kw.trim()) return;
+  // 两种档位都只替换当前词区间 (不重排整行), 差别仅在是否补收尾逗号
+  replaceWord(textarea, range.start, range.end, tag, { pad: suggestFormatEnabled() });
 }
 
 /** 为提示词输入框接入 /api/suggest 自动补全 (TAB 快速插入, ↑/↓ 切换, Enter 确认, Esc 关闭)。
@@ -655,6 +705,7 @@ function insertSuggestion(textarea, suggestion) {
  *  opts.portal: 传入一个定位根元素 (如全屏弹窗的 overlay) 时, 补全列表挂到该根节点并用
  *  fixed 定位, 避免被输入框所在的 overflow 裁剪容器 (如标签块视图) 挡住。 */
 export function wireAutocomplete(textarea, wrap, opts = {}) {
+  if (_suggestFmtPref === null) refreshSuggestFormatPref(); // 首次接入时预取「补全时格式化」开关
   const portalRoot = opts.portal || null;
   const list = el("div", { class: "suggest-list hidden" + (portalRoot ? " suggest-portal" : "") });
   if (!portalRoot) { list.style.left = "0"; list.style.right = "0"; }
@@ -746,9 +797,14 @@ export function wireAutocomplete(textarea, wrap, opts = {}) {
     suggestTimer = setTimeout(async () => {
       // 焦点已不在本输入框时不弹出, 避免干扰其它参数操作
       if (document.activeElement !== textarea) { hide(); return; }
-      const text = textarea.value;
-      const kw = text.split(",").pop().trim();
+      const r = wordRangeAt(textarea);
+      const kw = r.kw.trim();
+      // 光标正好停在分隔符上 (当前词为空) 不弹: 用户多半是在换行/分隔, 不是要补全
       if (!kw) { hide(); return; }
+      // 后端按逗号切最后一段取词, 这里把「光标前的当前词」拼成它期望的形式:
+      // 前面所有标签原样保留, 末段换成当前词 —— 光标在任意位置都能命中
+      const head = textarea.value.slice(0, r.start);
+      const text = head + kw;
       const ctl = new AbortController();
       suggestCtl = ctl;
       try {
@@ -764,6 +820,22 @@ export function wireAutocomplete(textarea, wrap, opts = {}) {
       }
     }, 400); // 防抖 400ms: 补全不需要 250ms 那么跟手, 也减少后端查询次数
   });
+
+  // 光标移动 (点击/方向键/Home/End) 后重新判定当前词: 词变了就按新位置重查一次,
+  // 保证「点回去改中间那个标签」也会立即弹出补全
+  let lastKey = "";
+  const recheckOnCaret = () => {
+    if (document.activeElement !== textarea) return;
+    const kw = wordRangeAt(textarea).kw.trim();
+    if (kw === lastKey) return;
+    lastKey = kw;
+    if (!kw) { hide(); return; }
+    textarea.dispatchEvent(new Event("input"));
+  };
+  textarea.addEventListener("keyup", (e) => {
+    if (["ArrowLeft", "ArrowRight", "Home", "End", "ArrowUp", "ArrowDown", "PageUp", "PageDown"].includes(e.key)) recheckOnCaret();
+  });
+  textarea.addEventListener("click", recheckOnCaret);
 
   textarea.addEventListener("blur", () => setTimeout(hide, 200));
 

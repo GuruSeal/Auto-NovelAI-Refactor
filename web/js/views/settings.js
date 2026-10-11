@@ -1,7 +1,7 @@
 // ============================================================
 // 配置设置视图
 // ============================================================
-import { $, el, clear, toast, confirmDialog, sliderRow } from "../ui.js";
+import { $, el, clear, toast, confirmDialog, sliderRow, refreshSuggestFormatPref } from "../ui.js";
 import { post, get, waitBackendBack } from "../api.js";
 import { onViewLeave } from "../viewLifecycle.js";
 
@@ -138,6 +138,7 @@ export async function render(container, ctx) {
   cf("🎉 完成提示音", "finish_sound");
   cf("🔄 启动时检查更新", "check_update");
   cf("📝 格式化输入", "format_input", "删除多余空格和逗号或添加缺少的空格和逗号");
+  cf("✨ 补全时格式化", "suggest_format", "在提示词输入框选择补全候选时整理格式 (关闭后只替换当前标签, 不改动其余文字)");
   cf("⚡ 跳过剩余点数/用量计算", "skip_inquire_anlas");
   sf("🪫 剩余用量提醒%", "anlas_remind_percent", -1, 100, 1, "某 Token 剩余用量小于等于该值时发送一次提醒 (-1 为关闭); 配置了 SMTP 发邮件, 未配置则在右上角弹通知");
   cf("🚭 用量为空时跳过 nai5 任务", "skip_nai5_no_usage", "NAI5 系列模型任务不分配给剩余用量为 0 的 Token (即使空闲); 全部 Token 无用量时跳过任务并提示");
@@ -205,6 +206,7 @@ export async function render(container, ctx) {
         return;
       }
       toast(res.message, "success");
+      try { refreshSuggestFormatPref(); } catch { /* 未接入补全时忽略 */ }
       // 检测端口 / 隐藏终端变更, 额外提示重启事项
       if (res.port_changed) {
         toast("端口修改需重启后重新绑定", "warning", 6000);
