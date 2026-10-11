@@ -34,24 +34,36 @@ if exist "Git\cmd\git.exe" (
     if exist "%~dp0Git\mingw64\etc\ssl\certs\ca-bundle.crt" set "GIT_SSL_CAINFO=%~dp0Git\mingw64\etc\ssl\certs\ca-bundle.crt"
 )
 
-rem ---- 查找 Python: 目录里有 venv / Python 文件夹就用, 两者都有时优先 venv ----
+rem ---- 查找 Python: 目录里有 .venv / venv / Python 文件夹就用, 优先 uv 建的 .venv ----
 set "PYTHON="
-if exist "venv\Scripts\python.exe" call :try_python "venv\Scripts\python.exe" PYTHON
+if exist ".venv\Scripts\python.exe" call :try_python ".venv\Scripts\python.exe" PYTHON
+if not defined PYTHON if exist "venv\Scripts\python.exe" call :try_python "venv\Scripts\python.exe" PYTHON
 if not defined PYTHON if exist "Python\python.exe" call :try_python "Python\python.exe" PYTHON
 if defined PYTHON goto :got_python
 
-rem ---- 都没有: 用系统安装的 Python (3.10+) 创建虚拟环境 venv ----
+rem ---- 都没有: 优先用 uv 建 .venv (uv 可用时), 否则退回系统 Python 建 venv ----
+where uv >nul 2>nul
+if not errorlevel 1 (
+    echo [ANR] 未找到虚拟环境, 正在用 uv 创建 .venv ...
+    uv venv --python 3.12
+    if exist ".venv\Scripts\python.exe" (
+        set "PYTHON=.venv\Scripts\python.exe"
+        goto :got_python
+    )
+    echo [ANR] 警告: uv 创建虚拟环境失败, 退回系统 Python。
+)
+
 set "SYSTEM_PY="
 for /f "delims=" %%P in ('where python 2^>nul') do (
     if not defined SYSTEM_PY call :try_python "%%P" SYSTEM_PY
 )
 if not defined SYSTEM_PY (
-    echo [ANR] 错误: 目录中没有 venv / Python 文件夹, 也未找到系统安装的 Python 3.10+。
+    echo [ANR] 错误: 目录中没有 .venv / venv / Python 文件夹, 也未找到 uv 或系统安装的 Python 3.10+。
     echo [ANR] 请先安装 Python（勾选 Add to PATH）后重试。
     pause
     exit /b 1
 )
-echo [ANR] 未找到 venv / Python 文件夹, 正在用系统 Python 创建虚拟环境: %SYSTEM_PY%
+echo [ANR] 未找到虚拟环境, 正在用系统 Python 创建虚拟环境: %SYSTEM_PY%
 "%SYSTEM_PY%" -X utf8 -m venv venv
 if not exist "venv\Scripts\python.exe" (
     echo [ANR] 错误: 创建虚拟环境失败, 请检查系统 Python 是否完整。
@@ -68,7 +80,13 @@ rem      极端情况"半安装"包被误判就绪时, main.py 导入即报错, 
 "%PYTHON%" -X utf8 -c "import importlib.util as u, sys; sys.exit(1 if any(u.find_spec(m) is None for m in ('fastapi','uvicorn','requests','PIL','loguru','ujson','psutil','pystray')) else 0)" >nul 2>nul
 if errorlevel 1 (
     echo [ANR] 正在检查/安装依赖, 首次运行可能需要几分钟...
-    "%PYTHON%" -X utf8 -s -m pip install -r requirements.txt -q --disable-pip-version-check
+    rem 优先用 uv 安装 (快且不污染全局), uv 不可用时退回 pip
+    where uv >nul 2>nul
+    if not errorlevel 1 (
+        uv pip install --python "%PYTHON%" -r requirements.txt -q
+    ) else (
+        "%PYTHON%" -X utf8 -s -m pip install -r requirements.txt -q --disable-pip-version-check
+    )
     if errorlevel 1 (
         echo [ANR] 警告: 依赖安装失败, 尝试继续启动...
     ) else (
@@ -76,6 +94,18 @@ if errorlevel 1 (
     )
 ) else (
     echo [ANR] 依赖已就绪
+)
+
+rem ---- pinned 依赖之外的隐式依赖 (requirements.txt 未列出但代码直接 import) ----
+"%PYTHON%" -X utf8 -c "import importlib.util as u, sys; sys.exit(1 if u.find_spec('piexif') is None else 0)" >nul 2>nul
+if errorlevel 1 (
+    echo [ANR] 补装 piexif ...
+    where uv >nul 2>nul
+    if not errorlevel 1 (
+        uv pip install --python "%PYTHON%" piexif -q
+    ) else (
+        "%PYTHON%" -X utf8 -s -m pip install piexif -q --disable-pip-version-check
+    )
 )
 
 echo [ANR] 正在启动 Auto-NovelAI-Refactor ...
