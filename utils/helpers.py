@@ -586,6 +586,30 @@ def _deps_fingerprint(path: str) -> str:
     return h.hexdigest()
 
 
+# 插件依赖安装超时 (秒)。原为 600: matplotlib/scipy 这类大包在慢网络下实测装不完,
+# 超时后既不落指纹又要等下次启动重试, 等于永远装不上。放宽到 20 分钟。
+_DEPS_INSTALL_TIMEOUT = 1200
+
+
+def _pip_install_cmd(path: str) -> list[str] | None:
+    """构造安装插件依赖的命令行。
+
+    优先走 uv: uv 建的虚拟环境默认**不含 pip**, 此时 `python -m pip` 必然
+    报 "No module named pip", 插件依赖全军覆没 (实测踩到)。uv 不可用才退回 pip。
+    uv 与 pip 的参数不通用: uv 没有 --user (venv 外本就该用 --system) 也没有
+    --disable-pip-version-check, 所以两条分支各拼各的。
+    """
+    uv = shutil.which("uv")
+    if uv:
+        # uv pip install 支持直接指定目标解释器, 不依赖当前解释器里有 pip
+        return [uv, "pip", "install", "--python", sys.executable, "-r", path, "--quiet"]
+    in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+    cmd = [sys.executable, "-X", "utf8", "-m", "pip", "install", "-r", path]
+    if not in_venv:
+        cmd.append("--user")
+    return cmd + ["--quiet", "--disable-pip-version-check"]
+
+
 def install_requirements(path: str) -> None:
     if env.share:
         logger.warning("共享模式下已跳过插件依赖安装")
@@ -606,23 +630,24 @@ def install_requirements(path: str) -> None:
         except OSError as e:
             logger.debug(f"读取插件依赖指纹失败, 将重新安装: {e}")
     logger.debug(f"正在安装插件依赖: {path}")
-    in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
-    cmd = [sys.executable, "-X", "utf8", "-m", "pip", "install", "-r", path]
-    if not in_venv:
-        cmd.append("--user")
-    cmd += ["--quiet", "--disable-pip-version-check"]
+    cmd = _pip_install_cmd(path)
+    if cmd is None:
+        logger.error(f"插件依赖安装失败 ({Path(path).name}): 未找到 uv 且当前环境无 pip")
+        return
     try:
         proc = subprocess.run(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             check=False,
-            timeout=600,
+            timeout=_DEPS_INSTALL_TIMEOUT,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         )
     except subprocess.TimeoutExpired:
         # 装不上依赖不该拖垮整个插件加载: 记一行错误, 下次启动会自然重试
-        logger.error(f"插件依赖安装超时 ({Path(path).name}): 超过 600 秒仍未结束, 本次已跳过")
+        logger.error(
+            f"插件依赖安装超时 ({Path(path).name}): 超过 {_DEPS_INSTALL_TIMEOUT:.0f} 秒仍未结束, 本次已跳过"
+        )
         return
     except OSError as e:
         logger.error(f"插件依赖安装中断 ({Path(path).name}): {e}")
