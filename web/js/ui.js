@@ -675,15 +675,57 @@ function wordRangeAt(textarea) {
   return { start, end, kw: value.slice(start, pos) };
 }
 
-/** 把当前词区间 [start, end) 换成 suggestion, 其余原文逐字保留 —— 这是关键:
- *  旧实现用 join(", ") 重写整行, 会把换行、多余空格、权重块写法全部压平。
- *  这里只动一段, 所以「补全时格式化」开关的可观测差异只剩收尾逗号的补法。
- *  词尾还跟着东西 → 精确替换; 词尾已在行末 → 补 ", " 方便接着输入下一个标签。 */
+/** 行内格式化: 整理逗号与多余空格, 与后端 format_str 的 _clean_line 保持同一套规则。
+ *  只在"一行"内整理, 绝不跨行 —— 换行是用户手动分的组, 必须原样保留。 */
+function cleanLine(line) {
+  return String(line)
+    .replace(/[,\s]*,[,\s]*/g, ", ") // 逗号两侧的空白/重复逗号归一为 ", "
+    .replace(/[ \t]+/g, " ") // 连续空格/制表符压成一个
+    .trim();
+}
+
+/** 按行格式化整段文本, 同时保留每一行的换行符 (数量与位置都不变)。
+ *  与后端 format_str 等价 (逐行 _clean_line); patch = { start, end, text } 表示
+ *  整理之前先把 [start, end) 换成 text。返回 { value, caret }。
+ *
+ *  光标定位: cleanLine 会 trim 行首尾空白, 替换点的列号必然偏移, 硬算容易错。
+ *  改为在整理后的那一行里 indexOf(text) 找回替换词, 直接落在它末尾 —— 
+ *  简单且对 trim 免疫 (替换词是刚插进去的标签, 不会与行内其它内容重复到找错)。
+ */
+function formatKeepingLines(value, patch = null) {
+  const text = patch ? value.slice(0, patch.start) + patch.text + value.slice(patch.end) : value;
+  const lines = text.split("\n"); // 换行符个数 = lines.length - 1, join("\n") 原样还原
+  const cleaned = lines.map(cleanLine);
+  const result = cleaned.join("\n");
+  let caret = result.length;
+  if (patch) {
+    const lineIdx = (text.slice(0, patch.start).match(/\n/g) || []).length;
+    const target = cleaned[lineIdx] ?? "";
+    // 在整理后的该行里找回替换词, 光标落在其后; 找不到就退化到行尾
+    let col = target.indexOf(patch.text);
+    col = col < 0 ? target.length : col + patch.text.length;
+    let offset = 0;
+    for (let i = 0; i < lineIdx; i++) offset += cleaned[i].length + 1;
+    caret = offset + col;
+  }
+  return { value: result, caret };
+}
+
+/** 把当前词区间 [start, end) 换成 suggestion。
+ *  pad=true (开启格式化): 按行整理整段 (换行符与位置都不动), 行内多余空格/逗号归一。
+ *  pad=false (关闭格式化): 只替换当前词区间, 一个字符都不多改。 */
 function replaceWord(textarea, start, end, suggestion, { pad = true } = {}) {
+  if (pad) {
+    const { value, caret } = formatKeepingLines(textarea.value, { start, end, text: suggestion });
+    textarea.value = value;
+    try { textarea.setSelectionRange(caret, caret); } catch { /* 只读/隐藏时忽略 */ }
+    textarea.dispatchEvent(new Event("input"));
+    return;
+  }
   const value = textarea.value;
   const before = value.slice(0, start);
   const after = value.slice(end);
-  const addSep = pad && after === "";
+  const addSep = after === "";
   textarea.value = before + suggestion + (addSep ? ", " : "") + after;
   const caret = before.length + suggestion.length + (addSep ? 2 : 0);
   try { textarea.setSelectionRange(caret, caret); } catch { /* 只读/隐藏时忽略 */ }
