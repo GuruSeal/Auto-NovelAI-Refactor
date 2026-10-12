@@ -25,35 +25,8 @@ assets/waifu2x-caffe
 assets/rife-ncnn-vulkan
 .wildcards_tmp/
 
-# 通配符默认全部忽略, 仅保留仓库自带的默认词条 (与 ANR 原项目一致)
-/wildcards/**
-!/wildcards/**/
-!/wildcards/动作/后视鸭子坐.txt
-!/wildcards/动作/坐着抬胳膊.txt
-!/wildcards/动作/正常位.txt
-!/wildcards/动作/看猫猫.txt
-!/wildcards/动作/触手.txt
-!/wildcards/场景/床上.txt
-!/wildcards/场景/温泉.txt
-!/wildcards/场景/草原.txt
-!/wildcards/表情/咬紧牙关.txt
-!/wildcards/表情/嘟嘴.txt
-!/wildcards/表情/爱心眼.txt
-!/wildcards/角色/GawrGura.txt
-!/wildcards/角色/GawrGura.png
-!/wildcards/角色/可莉.txt
-!/wildcards/角色/可莉.png
-!/wildcards/角色/拉菲.txt
-!/wildcards/角色/独角兽.txt
-!/wildcards/角色/纳西妲.txt
-!/wildcards/角色/铃兰.txt
-!/wildcards/角色/阿罗娜.txt
-!/wildcards/角色/雏鹤爱.txt
-!/wildcards/负面/去除小人.txt
-!/wildcards/负面/长负面提示词.txt
-!/wildcards/质量/常用质量词.txt
-!/wildcards/质量/空前缀.txt
-!/wildcards/质量/简单质量词.txt
+# 通配符目录已独立为子仓库 (wildcards/.git), 本仓库整体忽略, 不再跟踪
+/wildcards/
 
 # ================= 编辑器 =================
 .idea/
